@@ -440,7 +440,18 @@ else() # Linux
     )
 endif ()
 
+if (BBS_PY_RUNTIME)
+    add_subdirectory(Scripting)
+endif ()
+
 add_library(libslic3r_gui STATIC ${SLIC3R_GUI_SOURCES})
+if (BBS_PY_RUNTIME)
+    # GUI_App.cpp hooks host_init/host_shutdown; libbambu_api calls back
+    # into Plater. Static-library cycle, resolved at final link.
+    target_compile_definitions(libslic3r_gui PRIVATE BBS_PY_RUNTIME=1)
+    target_link_libraries(libslic3r_gui PRIVATE libbambu_api)
+    target_link_libraries(libbambu_api PUBLIC libslic3r_gui)
+endif ()
 
 foreach(_source IN ITEMS ${SLIC3R_GUI_SOURCES})
     get_filename_component(_source_path "${_source}" PATH)

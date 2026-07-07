@@ -37,6 +37,7 @@ option(SLIC3R_STATIC 			"Compile PrusaSlicer with static libraries (Boost, TBB, 
 option(SLIC3R_GUI    			"Compile PrusaSlicer with GUI components (OpenGL, wxWidgets)" 1)
 option(SLIC3R_FHS               "Assume PrusaSlicer is to be installed in a FHS directory structure" 0)
 option(SLIC3R_PCH               "Use precompiled headers" 1)
+option(BBS_PY_RUNTIME           "Embed the pyslic3r Python runtime (libbambu_api)" 1)
 option(SLIC3R_MSVC_COMPILE_PARALLEL "Compile on Visual Studio in parallel" 1)
 option(SLIC3R_ASAN              "Enable ASan on Clang and GCC" 0)
 option(SLIC3R_UBSAN             "Enable UBSan on Clang and GCC" 0)
@@ -612,6 +613,13 @@ endfunction()
 add_subdirectory(build-utils)
 add_subdirectory(bundled_deps)
 # libslic3r, PrusaSlicer GUI and the PrusaSlicer executable.
+if (BBS_PY_RUNTIME AND SLIC3R_GUI)
+    # Embedded pyslic3r runtime (src/slic3r/Scripting -> libbambu_api).
+    find_package(Python 3.10 REQUIRED COMPONENTS Interpreter Development.Embed)
+    find_package(pybind11 CONFIG REQUIRED)
+    message(STATUS "pyslic3r runtime enabled: Python ${Python_VERSION}, pybind11 ${pybind11_VERSION}")
+endif ()
+
 add_subdirectory(src)
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT PrusaSlicer_app_console)
 
