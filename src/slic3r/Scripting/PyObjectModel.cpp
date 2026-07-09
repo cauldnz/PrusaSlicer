@@ -114,7 +114,7 @@ struct PyPlateList {};
 struct PyPlate    { int idx; };
 
 // Which config a PyConfig fronts.
-enum class ConfigSource { Global, Print, Filament, Printer, Plate };
+enum class ConfigSource { Global, Print, Filament, Printer, Plate, Object };
 struct PyConfig { ConfigSource source; int plate_idx = 0; };
 
 // M3 slicing handles.
@@ -163,6 +163,10 @@ const ConfigBase *resolve_config(const PyConfig &c, const char *what)
         const DynamicPrintConfig *cfg = plater_or_throw(what)->config();
         if (cfg == nullptr) throw std::runtime_error("no global config");
         return cfg;
+    }
+    case ConfigSource::Object: {
+        // per-object overrides (ModelObject::config); plate_idx = object index.
+        return &object_at(c.plate_idx, what)->config.get();
     }
     case ConfigSource::Print:
     case ConfigSource::Filament:
@@ -251,6 +255,13 @@ void register_object_model(py::module_ &m)
                     "per-plate config is not supported on this platform (single bed); "
                     "use print_config");
             auto *plater = plater_or_throw("Config.set");
+            if (c.source == ConfigSource::Object) {
+                ModelObject *obj = object_at(c.plate_idx, "Config.set");
+                ConfigSubstitutionContext ctx(ForwardCompatibilitySubstitutionRule::EnableSilent);
+                obj->config.set_deserialize(key, value, ctx);
+                plater->changed_object(int(c.plate_idx));
+                return;
+            }
             PresetCollection *col = preset_collection(c.source);
             DynamicPrintConfig &cfg = col->get_edited_preset().config;
             if (!cfg.has(key))
@@ -304,6 +315,10 @@ void register_object_model(py::module_ &m)
             for (size_t i = 0; i < obj->volumes.size(); ++i)
                 out.append(PyVolume{o.idx, i});
             return out;
+        })
+        .def_property_readonly("config", [](const PyObject &o) {
+            (void) object_at(o.idx, "Object.config");   // bounds-check
+            return PyConfig{ConfigSource::Object, int(o.idx)};
         })
         .def("bounding_box", [](const PyObject &o) {
             const BoundingBoxf3 &bb = object_at(o.idx, "Object.bounding_box")->bounding_box_approx();
