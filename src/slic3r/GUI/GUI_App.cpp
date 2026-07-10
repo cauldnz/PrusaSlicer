@@ -10,6 +10,9 @@
 #include "GUI_App.hpp"
 #include "GUI_Init.hpp" // IWYU pragma: keep
 #include "GUI_ObjectList.hpp"
+#ifdef BBS_PY_RUNTIME
+#include "slic3r/Scripting/PyHost.hpp"
+#endif
 #include "GUI_ObjectManipulation.hpp"
 #include "GUI_Factories.hpp"
 #include "TopBar.hpp"
@@ -890,6 +893,9 @@ GUI_App::GUI_App(EAppMode mode)
 
 GUI_App::~GUI_App()
 {
+#ifdef BBS_PY_RUNTIME
+    pyslic3r::host_shutdown();   // finalize the embedded interpreter (main thread)
+#endif
     delete app_config;
     delete preset_bundle;
 }
@@ -1671,6 +1677,9 @@ bool GUI_App::on_init_inner()
             this->mainframe->register_win32_callbacks();
 #endif
             this->post_init();
+#ifdef BBS_PY_RUNTIME
+            pyslic3r::host_init();   // start the embedded pyslic3r runtime
+#endif
         }
 
         if (m_post_initialized && app_config->dirty())
