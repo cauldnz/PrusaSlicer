@@ -44,6 +44,7 @@
 #include "libslic3r/GCode/GCodeProcessor.hpp"  // GCodeProcessorResult
 #include "libslic3r/CustomGCode.hpp"      // colour-change-by-height
 #include "slic3r/GUI/GUI_App.hpp"
+#include "slic3r/GUI/GUI_ObjectList.hpp"   // obj_list()->delete_all_objects_from_list()
 #include "slic3r/GUI/Plater.hpp"
 #include "libslic3r/CutUtils.hpp"   // Cut class + ModelObjectCutAttribute (reworked cut)
 #include "slic3r/GUI/GLCanvas3D.hpp"   // canvas3D()->get_selection()
@@ -749,6 +750,13 @@ void register_object_model(py::module_ &m)
             GUI::Plater::TakeSnapshot snap(plater, std::string("API: clear model"));
             while (!plater->model().objects.empty())
                 plater->delete_object_from_model(int(plater->model().objects.size()) - 1);
+            // delete_object_from_model updates the model but NOT the object-list
+            // tree (upstream pairs it with delete_object_from_list; Prusa exposes no
+            // public delete_all_objects_from_model). Without this the tree keeps stale
+            // nodes, and a later load hits ObjectList::add_layer_root_item ->
+            // object(obj_idx) out of bounds (SIGSEGV). Sync the tree to the now-empty model.
+            if (auto *ol = GUI::wxGetApp().obj_list())
+                ol->delete_all_objects_from_list();
         });
 
     // ---- Plate / PlateList (single bed) -----------------------------------
