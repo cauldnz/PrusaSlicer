@@ -32,6 +32,9 @@
 
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Model.hpp"
+#include "libslic3r/Emboss.hpp"          // text2shapes / polygons2model (FreeType emboss)
+#include "libslic3r/EmbossShape.hpp"     // EmbossShape / HealedExPolygons
+#include "slic3r/Utils/WxFontUtils.hpp"  // font -> FontFile (Prusa has no load_text_shape)
 #include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/Config.hpp"
 #include "libslic3r/Preset.hpp"
@@ -110,6 +113,7 @@ struct PyDocument {};
 struct PyModel {};
 struct PyObject   { size_t idx; };
 struct PyVolume   { size_t obj_idx; size_t vol_idx; };
+struct PyText     { size_t obj_idx; size_t vol_idx; };
 struct PyPlateList {};
 struct PyPlate    { int idx; };
 
@@ -191,6 +195,51 @@ ModelVolume *volume_at(const PyVolume &v, const char *what)
     if (v.vol_idx >= obj->volumes.size())
         throw std::runtime_error("volume index out of range (model changed?)");
     return obj->volumes[v.vol_idx];
+}
+
+// Resolve a text handle -> ModelVolume, asserting it is editable emboss text.
+ModelVolume *text_at(const PyText &t, const char *what)
+{
+    ModelVolume *v = volume_at(PyVolume{t.obj_idx, t.vol_idx}, what);
+    if (!v->is_text() || !v->emboss_shape.has_value())
+        throw std::runtime_error(std::string(what) + ": volume is not editable text");
+    return v;
+}
+
+// Regenerate a text volume's mesh for `text` at emboss `scale`, via libslic3r
+// Emboss (Prusa has no load_text_shape). NOTE: in Prusa the rendered SIZE is
+// carried by emboss_shape.scale, not FontProp.size_in_mm — text2shapes emits
+// glyphs at a fixed em-size and polygons2model applies `scale`. So resizing
+// (fit) scales `scale`, not size_in_mm. Depth stays in mm (projection.depth).
+// Generated at local Z origin; the caller re-aligns Z to the original mesh so
+// surface placement is exact without recovering the original is_outside flag.
+static TriangleMesh _prusa_text_mesh(const ModelVolume *v, const std::string &text,
+                                     const FontProp &fp, double scale)
+{
+    wxFont wx_font = GUI::WxFontUtils::create_wxFont(v->text_configuration->style);
+    if (!wx_font.IsOk() && fp.face_name.has_value())
+        wx_font.SetFaceName(wxString::FromUTF8(fp.face_name->c_str()));
+    std::unique_ptr<Emboss::FontFile> ffp = GUI::WxFontUtils::create_font_file(wx_font);
+    if (!ffp)
+        throw std::runtime_error("Text.set_text: could not load font (face '" +
+            (fp.face_name.has_value() ? *fp.face_name : std::string("?")) + "')");
+    Emboss::FontFileWithCache font(std::move(ffp));
+    HealedExPolygons shapes = Emboss::text2shapes(font, text.c_str(), fp);
+    if (shapes.expolygons.empty())
+        throw std::runtime_error("Text.set_text: empty glyph shapes (font/text?)");
+    double depth  = v->emboss_shape->projection.depth / scale;
+    auto projectZ = std::make_unique<Emboss::ProjectZ>(depth);
+    Transform3d tr = Transform3d::Identity();
+    tr.scale(scale);
+    Emboss::ProjectTransform project(std::move(projectZ), tr);
+    return TriangleMesh(Emboss::polygons2model(shapes.expolygons, project));
+}
+
+// mm width of `text` at emboss `scale` (bbox X of the regenerated mesh).
+static double _prusa_text_width(const ModelVolume *v, const std::string &text,
+                                const FontProp &fp, double scale)
+{
+    return _prusa_text_mesh(v, text, fp, scale).bounding_box().size().x();
 }
 
 // Read slice stats off the sliced print into a PySliceResult. Main thread.
@@ -320,6 +369,83 @@ void register_object_model(py::module_ &m)
             return PyConfig{ConfigSource::Volume, int(v.obj_idx), int(v.vol_idx)};
         });
 
+    // ---- Text (editable emboss text; Prusa text_configuration + FreeType) ----
+    py::class_<PyText>(m, "Text")
+        .def_property_readonly("text", [](const PyText &t) {
+            return text_at(t, "Text.text")->text_configuration->text;
+        })
+        .def_property_readonly("font_name", [](const PyText &t) {
+            const EmbossStyle &st = text_at(t, "Text.font_name")->text_configuration->style;
+            return st.prop.face_name.has_value() ? *st.prop.face_name : st.name;
+        })
+        .def_property_readonly("font_size", [](const PyText &t) {
+            return text_at(t, "Text.font_size")->text_configuration->style.prop.size_in_mm;
+        })
+        .def_property_readonly("width", [](const PyText &t) {
+            ModelVolume *v = text_at(t, "Text.width");
+            return _prusa_text_width(v, v->text_configuration->text,
+                                     v->text_configuration->style.prop,
+                                     v->emboss_shape->scale);
+        })
+        .def("set_text", [](const PyText &t, const std::string &new_text,
+                            bool fit, py::object max_width) -> py::object {
+            main_thread("Text.set_text");
+            ModelObject *obj = object_at(t.obj_idx, "Text.set_text");
+            ModelVolume *vol = text_at(t, "Text.set_text");
+            const FontProp &fp = vol->text_configuration->style.prop;
+            double base_scale = vol->emboss_shape->scale;   // carries the size
+            double base_size  = fp.size_in_mm;              // metadata only
+
+            double target_w = max_width.is_none()
+                ? _prusa_text_width(vol, vol->text_configuration->text, fp, base_scale)
+                : max_width.cast<double>();
+
+            double scale = base_scale;
+            TriangleMesh mesh = _prusa_text_mesh(vol, new_text, fp, scale);
+            double w = mesh.bounding_box().size().x();
+            bool fitted = false;
+            if (fit && w > target_w && w > 0.0) {
+                scale *= target_w / w;                       // resize via scale, not size_in_mm
+                mesh = _prusa_text_mesh(vol, new_text, fp, scale);
+                w = mesh.bounding_box().size().x();
+                fitted = true;
+            }
+            if (mesh.empty())
+                throw std::runtime_error("Text.set_text: mesh generation failed");
+            double ratio = scale / base_scale;               // size change factor
+            double new_size = base_size * ratio;
+
+            TextConfiguration tc = *vol->text_configuration;   // copy + update
+            tc.text = new_text;
+            tc.style.prop.size_in_mm = (float) new_size;
+            EmbossShape es2 = *vol->emboss_shape;              // keep for re-editability
+            es2.scale = scale;
+
+            GUI::wxGetApp().plater()->take_snapshot(std::string("Edit Text"));
+            // Re-align the regenerated mesh's Z base to the original so the text
+            // keeps its exact surface placement (obj->volumes holds heap pointers,
+            // so `vol` stays valid across add_volume until it is deleted below).
+            double old_zmin = vol->mesh().bounding_box().min.z();
+            mesh.translate(0.f, 0.f, (float)(old_zmin - mesh.bounding_box().min.z()));
+            Geometry::Transformation tran = vol->get_transformation();
+            ModelVolume *nv = obj->add_volume(std::move(mesh), vol->type());
+            nv->calculate_convex_hull();
+            nv->set_transformation(tran);
+            nv->text_configuration = tc;
+            nv->emboss_shape = es2;
+            nv->name = vol->name;
+            nv->config.apply(vol->config);
+            std::swap(obj->volumes[t.vol_idx], obj->volumes.back());
+            obj->delete_volume(obj->volumes.size() - 1);
+            obj->invalidate_bounding_box();
+            GUI::wxGetApp().plater()->changed_object(int(t.obj_idx));
+
+            py::dict d;
+            d["text"] = new_text; d["font_size"] = new_size; d["width"] = w;
+            d["fit_target"] = target_w; d["fitted"] = fitted;
+            return d;
+        }, py::arg("text"), py::arg("fit") = true, py::arg("max_width") = py::none());
+
     // ---- Object -----------------------------------------------------------
     py::class_<PyObject>(m, "Object")
         .def_property_readonly("name", [](const PyObject &o) {
@@ -334,6 +460,14 @@ void register_object_model(py::module_ &m)
             py::list out;
             for (size_t i = 0; i < obj->volumes.size(); ++i)
                 out.append(PyVolume{o.idx, i});
+            return out;
+        })
+        .def("texts", [](const PyObject &o) {
+            ModelObject *obj = object_at(o.idx, "Object.texts");
+            py::list out;
+            for (size_t i = 0; i < obj->volumes.size(); ++i)
+                if (obj->volumes[i]->is_text())
+                    out.append(PyText{o.idx, i});
             return out;
         })
         .def_property_readonly("config", [](const PyObject &o) {
