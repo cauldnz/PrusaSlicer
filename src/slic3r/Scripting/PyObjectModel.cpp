@@ -433,6 +433,23 @@ static const std::vector<SettingDef> &settings_defs()
         {"retract_speed","retract_speed",'f',true,{}},
         {"z_hop","retract_lift",'f',true,{}},
         {"wipe_tower","wipe_tower",'b',false,{}},
+        {"bottom_pattern","bottom_fill_pattern",'e',false,{{"monotonic","monotonic"},{"concentric","concentric"},{"aligned","alignedrectilinear"}}},
+        {"solid_infill_speed","solid_infill_speed",'f',false,{}},
+        {"top_surface_speed","top_solid_infill_speed",'f',false,{}},
+        {"bridge_speed","bridge_speed",'f',false,{}},
+        {"support_speed","support_material_speed",'f',false,{}},
+        {"bridge_flow","bridge_flow_ratio",'f',false,{}},
+        {"fan_min","min_fan_speed",'i',true,{}},
+        {"supports_top_gap","support_material_contact_distance",'f',false,{}},
+        {"supports_pattern","support_material_pattern",'e',false,{{"rectilinear","rectilinear"},{"grid","rectilinear-grid"},{"honeycomb","honeycomb"}}},
+        {"supports_interface_layers","support_material_interface_layers",'i',false,{}},
+        {"brim_gap","brim_separation",'f',false,{}},
+        {"skirt_distance","skirt_distance",'f',false,{}},
+        {"retract_on_layer_change","retract_layer_change",'b',false,{}},
+        {"detect_thin_walls","thin_walls",'b',false,{}},
+        {"avoid_crossing_walls","avoid_crossing_perimeters",'b',false,{}},
+        {"resolution","resolution",'f',false,{}},
+        {"infill_wall_overlap","infill_overlap",'p',false,{}},
     };
     return defs;
 }
