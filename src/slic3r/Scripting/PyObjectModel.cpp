@@ -1816,6 +1816,20 @@ void register_object_model(py::module_ &m)
             return int(n);
         }, py::arg("colors"))
         // ---- M3 slicing ---------------------------------------------------
+        .def("validate", [](const PyDocument &) {
+            main_thread("Document.validate");
+            auto *plater = plater_or_throw("Document.validate");
+            // Apply the current model + edited config to the Print synchronously (the
+            // same apply the background slicer does), then read validate() — no slice.
+            Print &print = plater->active_fff_print();
+            const DynamicPrintConfig cfg = GUI::wxGetApp().preset_bundle->full_config();
+            print.apply(plater->model(), cfg);
+            std::string err = print.validate();
+            py::dict d;
+            d["ok"]    = err.empty();
+            d["error"] = err;
+            return d;
+        })
         .def("slice", [](const PyDocument &, py::object /*plate*/) {
             // Single-bed: slice the whole bed (reslice starts the worker).
             auto *plater = plater_or_throw("Document.slice");
