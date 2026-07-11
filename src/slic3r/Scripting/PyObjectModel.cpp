@@ -1082,6 +1082,30 @@ void register_object_model(py::module_ &m)
         .def_property_readonly("printer_config", [](const PyDocument &) {
             return PyConfig{ConfigSource::Printer};
         })
+        .def_property_readonly("filament_count", [](const PyDocument &) {
+            auto *nd = GUI::wxGetApp().preset_bundle->printers.get_edited_preset()
+                          .config.option<ConfigOptionFloats>("nozzle_diameter");
+            return (int)(nd ? nd->size() : 1);
+        })
+        // Set up N project filaments (Prusa: extruder count = nozzle_diameter
+        // .size(); resize per-extruder printer opts + sync MM filament presets).
+        .def("set_filaments", [](const PyDocument &, py::list colors) {
+            auto *plater = plater_or_throw("Document.set_filaments");
+            auto *pb = GUI::wxGetApp().preset_bundle;
+            const unsigned int n = (unsigned int) colors.size();
+            if (n < 1 || n > 16) throw std::runtime_error("filament count must be 1..16");
+            GUI::Plater::TakeSnapshot snap(plater, std::string("API: set filaments"));
+            Preset &printer = pb->printers.get_edited_preset();
+            printer.set_num_extruders(n);
+            pb->update_multi_material_filament_presets();
+            std::vector<std::string> cols;
+            for (auto c : colors) { std::string h = c.cast<std::string>();
+                if (!h.empty() && h[0] != '#') h = "#" + h; cols.push_back(h); }
+            if (auto *opt = printer.config.option<ConfigOptionStrings>("extruder_colour"))
+                opt->values = cols;
+            plater->on_config_change(pb->full_config());
+            return int(n);
+        }, py::arg("colors"))
         // ---- M3 slicing ---------------------------------------------------
         .def("slice", [](const PyDocument &, py::object /*plate*/) {
             // Single-bed: slice the whole bed (reslice starts the worker).
