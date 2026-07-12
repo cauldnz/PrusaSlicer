@@ -1,7 +1,7 @@
 name: Build osx
 
+# macOS runners are ~10x Linux cost — build only on a manual workflow_dispatch.
 on:
-  push:
   workflow_dispatch:
 
 jobs:
