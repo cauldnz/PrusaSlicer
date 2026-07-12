@@ -1,9 +1,7 @@
 name: Build osx asan
 
+# macOS runners are ~10x Linux cost — build only on a manual workflow_dispatch.
 on:
-  push:
-    branches:
-      - master
   workflow_dispatch:
 
 jobs:
