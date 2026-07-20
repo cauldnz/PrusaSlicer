@@ -1926,6 +1926,12 @@ void register_object_model(py::module_ &m)
                 if (clock::now() - t0 > std::chrono::seconds(120)) break;
                 wxMilliSleep(40);
             }
+            // Settle: let the ArrangeJob completion apply before returning (fixes
+            // slice(arrange=True) "not sliceable" on a fresh off-plate object).
+            for (int k = 0; k < 12; ++k) {
+                if (wxTheApp != nullptr) wxTheApp->Yield(true);
+                wxMilliSleep(20);
+            }
         }, py::arg("wait") = false);
 
     // ---- SliceResult ------------------------------------------------------
