@@ -2117,6 +2117,80 @@ void register_object_model(py::module_ &m)
             for (int i = 0; i < n; ++i) out.append(PyFilament{(size_t) i});
             return out;
         })
+        // ---- Multi-colour: flush / purge volumes (wipe tower) -------------
+        // Prusa: the purge matrix is `wiping_volumes_matrix` (N*N mm^3, row=from).
+        // No global flush multiplier; wipe_into_infill/objects are per-object, so
+        // flush_multiplier/flush_into are [B O] only here (report n/a).
+        .def("flush_matrix", [](const PyDocument &) {
+            auto *pb = GUI::wxGetApp().preset_bundle;
+            auto *nd_ = pb->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter");
+            int n = (int)(nd_ ? nd_->size() : 1);
+            DynamicPrintConfig *cfg = nullptr;
+            if (pb->printers.get_edited_preset().config.has("wiping_volumes_matrix")) cfg = &pb->printers.get_edited_preset().config;
+            else if (pb->prints.get_edited_preset().config.has("wiping_volumes_matrix")) cfg = &pb->prints.get_edited_preset().config;
+            else if (pb->project_config.has("wiping_volumes_matrix")) cfg = &pb->project_config;
+            if (cfg == nullptr) throw std::runtime_error("no wiping_volumes_matrix");
+            const auto &v = cfg->option<ConfigOptionFloats>("wiping_volumes_matrix")->values;
+            py::list rows;
+            for (int i = 0; i < n; ++i) {
+                py::list row;
+                for (int j = 0; j < n; ++j) {
+                    size_t idx = (size_t) i * n + j;
+                    row.append(idx < v.size() ? v[idx] : 0.0);
+                }
+                rows.append(row);
+            }
+            return rows;
+        })
+        .def("set_flush", [](const PyDocument &, int from_f, int to_f, double volume) {
+            auto *plater = plater_or_throw("Document.set_flush");
+            auto *pb = GUI::wxGetApp().preset_bundle;
+            auto *nd_ = pb->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter");
+            int n = (int)(nd_ ? nd_->size() : 1);
+            if (from_f < 0 || from_f >= n || to_f < 0 || to_f >= n)
+                throw std::runtime_error("filament index out of range 0.." + std::to_string(n - 1));
+            DynamicPrintConfig *cfg = nullptr;
+            if (pb->printers.get_edited_preset().config.has("wiping_volumes_matrix")) cfg = &pb->printers.get_edited_preset().config;
+            else if (pb->prints.get_edited_preset().config.has("wiping_volumes_matrix")) cfg = &pb->prints.get_edited_preset().config;
+            else if (pb->project_config.has("wiping_volumes_matrix")) cfg = &pb->project_config;
+            if (cfg == nullptr) throw std::runtime_error("no wiping_volumes_matrix");
+            auto *opt = cfg->option<ConfigOptionFloats>("wiping_volumes_matrix");
+            if ((int) opt->values.size() < n * n) opt->values.resize((size_t) n * n, 0.0);
+            opt->values[(size_t) from_f * n + to_f] = volume;
+            plater->on_config_change(pb->full_config());
+            return volume;
+        }, py::arg("from_filament"), py::arg("to_filament"), py::arg("volume"))
+        .def("set_flush_matrix", [](const PyDocument &, py::list matrix) {
+            auto *plater = plater_or_throw("Document.set_flush_matrix");
+            auto *pb = GUI::wxGetApp().preset_bundle;
+            auto *nd_ = pb->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter");
+            int n = (int)(nd_ ? nd_->size() : 1);
+            if ((int) matrix.size() != n)
+                throw std::runtime_error("matrix must be " + std::to_string(n) + "x" + std::to_string(n));
+            std::vector<double> flat((size_t) n * n, 0.0);
+            for (int i = 0; i < n; ++i) {
+                py::list row = matrix[i].cast<py::list>();
+                if ((int) row.size() != n) throw std::runtime_error("each row must have N entries");
+                for (int j = 0; j < n; ++j) flat[(size_t) i * n + j] = row[j].cast<double>();
+            }
+            DynamicPrintConfig *cfg = nullptr;
+            if (pb->printers.get_edited_preset().config.has("wiping_volumes_matrix")) cfg = &pb->printers.get_edited_preset().config;
+            else if (pb->prints.get_edited_preset().config.has("wiping_volumes_matrix")) cfg = &pb->prints.get_edited_preset().config;
+            else if (pb->project_config.has("wiping_volumes_matrix")) cfg = &pb->project_config;
+            if (cfg == nullptr) throw std::runtime_error("no wiping_volumes_matrix");
+            cfg->option<ConfigOptionFloats>("wiping_volumes_matrix")->values = flat;
+            plater->on_config_change(pb->full_config());
+            return n;
+        }, py::arg("matrix"))
+        .def_property("flush_multiplier",
+            [](const PyDocument &) { return 1.0; },   // PrusaSlicer has no global flush multiplier
+            [](const PyDocument &, double) {
+                throw std::runtime_error("flush_multiplier is not available on PrusaSlicer ([B O] only)");
+            })
+        .def("flush_into", [](const PyDocument &) { return py::dict(); })  // per-object on Prusa; n/a globally
+        .def("set_flush_into", [](const PyDocument &, py::object, py::object, py::object) {
+            throw std::runtime_error("flush_into is per-object on PrusaSlicer ([B O] only for the global form)");
+        }, py::arg("infill") = py::none(), py::arg("support") = py::none(), py::arg("objects") = py::none())
         .def_property_readonly("filament_count", [](const PyDocument &) {
             auto *nd = GUI::wxGetApp().preset_bundle->printers.get_edited_preset()
                           .config.option<ConfigOptionFloats>("nozzle_diameter");
