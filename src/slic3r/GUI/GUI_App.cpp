@@ -3580,6 +3580,12 @@ void GUI_App::window_pos_sanitize(wxTopLevelWindow* window)
 
 bool GUI_App::config_wizard_startup()
 {
+    // pyslic3r: a scripted session (env PYSLIC3R_SCRIPT) must never block on the
+    // modal first-run wizard — automation drives fresh datadirs headlessly.
+    if (std::getenv("PYSLIC3R_SCRIPT")) {
+        BOOST_LOG_TRIVIAL(info) << "pyslic3r: skipping startup config wizard (PYSLIC3R_SCRIPT set)";
+        return false;
+    }
     if (!m_app_conf_exists || preset_bundle->printers.only_default_printers()) {
         run_wizard(ConfigWizard::RR_DATA_EMPTY);
         return true;
