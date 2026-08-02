@@ -2561,11 +2561,18 @@ void register_object_model(py::module_ &m)
             // install the model's default filament(s) so the datadir can slice.
             // NOTE: Prusa's PrinterModel has no `id` member (Bambu's does) — match
             // on name only, or this will not compile against this tree.
+            // Match the model ID, not the display name: printer_model is "MK4S"
+            // while PrinterModel::name is "Original Prusa MK4S" (Preset.hpp:54-55
+            // declares both). Comparing them meant nothing ever matched and the
+            // default materials were silently never installed.
+            // Scoped by vendor too — model ids are only unique within a vendor.
             std::vector<std::string> fils;
-            for (const auto &vp : pb->vendors)
+            for (const auto &vp : pb->vendors) {
+                if (vp.second.id != vendor) continue;
                 for (const auto &pm : vp.second.models)
-                    if (pm.name == model)
+                    if (pm.id == model)
                         for (const auto &f : pm.default_materials) fils.push_back(f);
+            }
             if (!fils.empty()) {
                 std::map<std::string, std::string> sec =
                     ac->has_section(AppConfig::SECTION_FILAMENTS)
