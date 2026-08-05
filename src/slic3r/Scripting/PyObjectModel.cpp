@@ -1291,6 +1291,39 @@ void register_object_model(py::module_ &m)
         // ---- geometry finish (UI-parity: drop-to-bed, scale-to-fit, rename) --
         .def("split", [](const PyObject &o) {
             main_thread("Object.split");
+            // Precondition, because the GUI path cannot fail safely here. All three
+            // forks guard split with `if (!volume->is_splittable())` and then pop a
+            // wxMessageBox ("contains only one part and can not be split"). Headless
+            // nothing dismisses that modal, so the app wedges forever inside
+            // gtk_dialog_run — no error, no log, just a hang until the harness
+            // timeout (issue #93). Test the SAME predicate first and raise, so the
+            // caller gets an ordinary Python exception instead of a dead app.
+            {
+                // MIRROR THE FORK'S OWN ALGORITHM (ModelProcessing::split): EVERY
+                // model-part volume is shell-split unconditionally, and modifiers
+                // are skipped entirely. So the object is splittable when the total
+                // number of resulting shells is >= 2 -- which two single-shell
+                // model parts satisfy, even though neither is is_splittable().
+                // (This is where Prusa differs from Bambu/Orca, which skip shell
+                // splitting as soon as any extra volume exists.)
+                const ModelObject *_so = object_at(o.idx, "Object.split");
+                int _parts = 0;
+                bool _any_multi_shell = false;
+                for (const ModelVolume *_v : _so->volumes)
+                    if (_v->is_model_part()) {
+                        ++_parts;
+                        if (_v->is_splittable()) _any_multi_shell = true;
+                    }
+                const bool _splittable = (_parts >= 2) || _any_multi_shell;
+                if (!_splittable)
+                    throw std::runtime_error(
+                        _parts == 0
+                            ? "split: object has no model-part volume to split"
+                            : "split: the object's single model part is one connected "
+                              "shell and cannot be split (use obj.cut to divide it, or "
+                              "load a multi-part mesh)");
+            }
+
             _select_only(o.idx, "Object.split");
             plater_or_throw("Object.split")->split_object();
             return model_or_throw("Object.split").objects.size();
