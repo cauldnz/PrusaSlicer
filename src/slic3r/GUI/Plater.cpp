@@ -7855,6 +7855,19 @@ const std::vector<GCodeProcessorResult>& Plater::get_gcode_results() const
     return p->gcode_results;
 }
 
+void Plater::reset_gcode_results()
+{
+    for (auto &g : p->gcode_results) {
+        g.reset();
+        // MEASURED, not assumed: GCodeProcessorResult::reset() clears everything
+        // EXCEPT filename (GCodeProcessor.cpp:564) — and filename is exactly the
+        // field save_gcode reads as its validity signal. Reusing upstream's reset
+        // alone changed nothing; the repro still handed back the stale file.
+        // Clear the signal explicitly.
+        g.filename.clear();
+    }
+}
+
 const sla::WorkflowManager& Plater::get_workflow_manager() const
 {
     return *p->workflow_manager;

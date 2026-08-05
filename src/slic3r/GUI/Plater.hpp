@@ -110,6 +110,10 @@ public:
 
     std::vector<std::unique_ptr<Print>>& get_fff_prints();
     const std::vector<GCodeProcessorResult>& get_gcode_results() const;
+    // pyslic3r (#106): invalidate all beds' G-code results. Called when a reslice
+    // STARTS, so a failed slice cannot leave the previous slice's filename behind
+    // for save_gcode to hand back as if it were fresh.
+    void reset_gcode_results();
 
     void new_project();
     void load_project();

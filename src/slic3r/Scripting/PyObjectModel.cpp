@@ -2528,6 +2528,11 @@ void register_object_model(py::module_ &m)
         .def("slice", [](const PyDocument &, py::object /*plate*/) {
             // Single-bed: slice the whole bed (reslice starts the worker).
             auto *plater = plater_or_throw("Document.slice");
+            // #106: the old result is conceptually gone the moment a new slice
+            // starts. Without this, a slice that FAILS leaves the previous
+            // filename in gcode_results and save_gcode hands back a stale file
+            // with no error — the deterministic repro in stale_gcode_test.py.
+            plater->reset_gcode_results();
             plater->reslice();
             return PySliceJob{0};
         }, py::arg("plate") = py::none())
