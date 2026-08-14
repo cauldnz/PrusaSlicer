@@ -150,7 +150,14 @@ enum class ConfigSource { Global, Print, Filament, Printer, Plate, Object, Volum
 struct PyConfig { ConfigSource source; int plate_idx = 0; int vol_idx = 0; };
 
 // M3 slicing handles.
-struct PySliceJob { int plate_idx; };
+struct PySliceJob {
+    int  plate_idx;
+    // Whether the print still read as finished() immediately AFTER reslice() was
+    // issued. False in the normal case (reslice invalidates), and that is what
+    // lets wait() accept a slice which completes before its first poll — see the
+    // race documented at SliceJob.wait.
+    bool finished_at_start = true;
+};
 struct PySliceResult
 {
     bool                    success = false;
@@ -2257,7 +2264,21 @@ void register_object_model(py::module_ &m)
                 const auto t0 = clock::now();
                 // Don't accept a stale finished() from a previous slice: require
                 // we've observed the process as running/scheduled at least once.
-                bool saw_running = false;
+                //
+                // But inferring that purely by observation loses a race. A slice
+                // that COMPLETES before the first poll is finished && !scheduled
+                // on iteration one, so `saw_running` never gets set, the success
+                // branch below can never fire, and wait() burns its whole timeout
+                // reporting "print did not finish" — on a slice that finished
+                // perfectly well, with the G-code already on disk. Intermittent by
+                // nature (it depends on whether the slice beats the first poll),
+                // which is what made it read as a flaky product bug.
+                //
+                // slice() already tells us what we need: if the print was NOT
+                // finished once reslice() had been issued, then any finished()
+                // we see afterwards is OURS and can be trusted immediately. The
+                // observe-first guard is kept for the case where it was.
+                bool saw_running = !j.finished_at_start;
                 for (;;) {
                     if (wxTheApp != nullptr) wxTheApp->Yield(true);  // deliver events
                     const bool finished  = plater->active_fff_print().finished();
@@ -2534,7 +2555,12 @@ void register_object_model(py::module_ &m)
             // with no error — the deterministic repro in stale_gcode_test.py.
             plater->reset_gcode_results();
             plater->reslice();
-            return PySliceJob{0};
+            // Record whether the print is ALREADY back to finished() at this point.
+            // Normally reslice() has invalidated it, so this is false and wait()
+            // may trust the next finished() it sees. If it is still true, the
+            // invalidation has not landed yet and wait() keeps its stale-result
+            // guard (must observe not-finished first).
+            return PySliceJob{0, plater->active_fff_print().finished()};
         }, py::arg("plate") = py::none())
         // Copy the last sliced G-code to `path` (the "Export G-code" result).
         .def("save_gcode", [](const PyDocument &, const std::string &path) {
