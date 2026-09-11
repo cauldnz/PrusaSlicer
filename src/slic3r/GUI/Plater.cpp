@@ -18,6 +18,11 @@
 ///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
 ///|/
 #include "Plater.hpp"
+
+#ifdef BBS_PY_RUNTIME
+#include "slic3r/Scripting/PyHost.hpp"   // headless_session/push_warning (#121)
+#endif
+
 #include "slic3r/GUI/BitmapCache.hpp"
 #include "slic3r/GUI/Jobs/UIThreadWorker.hpp"
 #include "slic3r/Utils/PrusaConnect.hpp"
@@ -1330,6 +1335,24 @@ void Plater::notify_about_installed_presets()
     }
 }
 
+// pyslic3r (#121): a dialog in the load path is a permanent hang in a scripted
+// session -- nothing clicks OK -- and the ones here are informational: the load
+// has already done what it could. Each site asks this first, and what it
+// suppressed is recorded for Document.warnings to read back.
+static bool headless_note(const std::string &msg)
+{
+#ifdef BBS_PY_RUNTIME
+    if (!pyslic3r::headless_session())
+        return false;
+    BOOST_LOG_TRIVIAL(warning) << "pyslic3r: suppressed load dialog: " << msg;
+    pyslic3r::push_warning(msg);
+    return true;
+#else
+    (void) msg;
+    return false;
+#endif
+}
+
 std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_files, bool load_model, bool load_config, bool imperial_units/* = false*/)
 {
     if (input_files.empty()) { return std::vector<size_t>(); }
@@ -1500,9 +1523,13 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                         "This project was created in a newer version of PrusaSlicer. Only the geometry was loaded.\n"
                         "Update to the latest version for full compatibility.\nFor more info: <a href=%2%>%2%</a>"),
                         from_path(filename), url);
-                    HtmlCapableRichMessageDialog dialog(q, message ,title, wxOK,
-                        [&url](const std::string&) { wxGetApp().open_browser_with_warning_dialog(url); });
-                    dialog.ShowModal();
+                    if (!headless_note("the 3mf config could not be loaded: project created in a newer "
+                                       "PrusaSlicer (" + prusaslicer_generator_version->to_string() + " > " +
+                                       std::string(SLIC3R_VERSION) + "); geometry loaded, config ignored")) {
+                        HtmlCapableRichMessageDialog dialog(q, message ,title, wxOK,
+                            [&url](const std::string&) { wxGetApp().open_browser_with_warning_dialog(url); });
+                        dialog.ShowModal();
+                    }
                 }
             }
             if (!config_substitutions.empty())
@@ -1517,9 +1544,11 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                     for (const std::string& s : post_process->values)
                         text += s;
 
-                    InfoDialog msg_dlg(nullptr, msg, from_u8(text), true, wxOK | wxICON_WARNING);
-                    msg_dlg.set_caption(wxString(SLIC3R_APP_NAME " - ") + _L("Attention!"));
-                    msg_dlg.ShowModal();
+                    if (!headless_note("the 3mf contains a POST-PROCESSING SCRIPT, which runs on export: " + text)) {
+                        InfoDialog msg_dlg(nullptr, msg, from_u8(text), true, wxOK | wxICON_WARNING);
+                        msg_dlg.set_caption(wxString(SLIC3R_APP_NAME " - ") + _L("Attention!"));
+                        msg_dlg.ShowModal();
+                    }
                 }
 
                 Preset::normalize(config); //???
