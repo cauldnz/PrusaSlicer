@@ -54,6 +54,7 @@
 #include "libslic3r/GCode/GCodeProcessor.hpp"  // GCodeProcessorResult
 #include "libslic3r/CustomGCode.hpp"      // colour-change-by-height
 #include "slic3r/GUI/GUI_App.hpp"
+#include "PyHost.hpp"                       // warnings()/clear_warnings() (#121)
 #include "slic3r/GUI/GUI_ObjectList.hpp"   // obj_list()->delete_all_objects_from_list()
 #include "slic3r/GUI/Plater.hpp"
 #include "libslic3r/CutUtils.hpp"   // Cut class + ModelObjectCutAttribute (reworked cut)
@@ -95,6 +96,15 @@ GUI::Plater *plater_or_throw(const char *what)
 }
 
 Model &model_or_throw(const char *what) { return plater_or_throw(what)->model(); }
+
+// The Arrange-settings "Spacing" value (#122), written through the GUI's own db
+// so it lands in the app config per print sequence, exactly as the slider does.
+void set_arrange_spacing(GUI::Plater *plater, double mm)
+{
+    if (mm < 0.0)
+        throw std::runtime_error("arrange spacing must be >= 0 (0 = auto)");
+    plater->canvas3D()->get_arrange_settings_db().set_distance_from_objects(float(mm));
+}
 
 ModelObject *object_at(size_t idx, const char *what)
 {
@@ -2188,11 +2198,38 @@ void register_object_model(py::module_ &m)
             return PyPlate{i};
         })
         // ---- M2 mutation --------------------------------------------------
-        .def("arrange", [](const PyPlateList &, bool wait) {
+        // Arrange spacing in mm -- the "Spacing" slider in the Arrange settings
+        // popup. Read and written through the GUI's own settings db, so the value
+        // persists per print sequence exactly as the slider does.
+        //
+        // Exposed because "arrange for the selected printer" is not always the
+        // question: a layout may have to clear a DIFFERENT machine's requirement
+        // than the one doing the slicing (#122).
+        .def_property("spacing",
+            [](const PyPlateList &) {
+                auto *plater = plater_or_throw("PlateList.spacing");
+                main_thread("PlateList.spacing");
+                const auto *view = plater->canvas3D()->get_arrange_settings_view();
+                if (view == nullptr) throw std::runtime_error("no arrange settings");
+                return double(view->get_distance_from_objects());
+            },
+            [](const PyPlateList &, double mm) {
+                auto *plater = plater_or_throw("PlateList.spacing");
+                main_thread("PlateList.spacing");
+                set_arrange_spacing(plater, mm);
+            })
+        .def("arrange", [](const PyPlateList &, bool wait, py::object spacing) {
             // Auto-arrange, same as the toolbar button. Asynchronous — starts a
             // background ArrangeJob. With wait=True, pump the event loop (GIL
             // released) until the job worker is idle.
+            //
+            // `spacing` (mm) is the Arrange-settings gap, applied before the job
+            // starts; it persists afterwards exactly as moving the slider does.
             auto *plater = plater_or_throw("PlateList.arrange");
+            if (!spacing.is_none()) {
+                main_thread("PlateList.arrange(spacing=)");
+                set_arrange_spacing(plater, spacing.cast<double>());
+            }
             plater->arrange(/*current_bed_only=*/false);
             if (!wait) return;
             main_thread("PlateList.arrange(wait=True)");
@@ -2211,7 +2248,7 @@ void register_object_model(py::module_ &m)
                 if (wxTheApp != nullptr) wxTheApp->Yield(true);
                 wxMilliSleep(20);
             }
-        }, py::arg("wait") = false);
+        }, py::arg("wait") = false, py::arg("spacing") = py::none());
 
     // ---- SliceResult ------------------------------------------------------
     py::class_<PySliceResult>(m, "SliceResult")
@@ -2581,8 +2618,17 @@ void register_object_model(py::module_ &m)
         // Open a full 3MF project: geometry + its embedded config (unlike
         // model.add, which loads geometry only). Does not clear the scene —
         // call model.clear() first for a clean replace.
+        // What the loader would have told a human in a dialog. Headless those
+        // dialogs are suppressed (#121) -- a batch job reads them here instead and
+        // decides for itself whether to proceed. Cleared by each open_project.
+        .def_property_readonly("warnings", [](const PyDocument &) {
+            return warnings();
+        })
         .def("open_project", [](const PyDocument &, const std::string &path) {
             auto *plater = plater_or_throw("Document.open_project");
+            // Warnings are per-load: what the previous open suppressed is not
+            // this open's problem.
+            clear_warnings();
             GUI::Plater::TakeSnapshot snap(plater, std::string("API: open project"));
             std::vector<boost::filesystem::path> paths{ boost::filesystem::path(path) };
             plater->load_files(paths, /*load_model=*/true, /*load_config=*/true,

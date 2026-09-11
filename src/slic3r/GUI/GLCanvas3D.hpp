@@ -743,6 +743,10 @@ public:
     const Model* get_model() const { return m_model; }
 
     const arr2::ArrangeSettingsView * get_arrange_settings_view() const { return &m_arrange_settings_dialog; }
+    // pyslic3r (#122): the arrange spacing is writable through the GUI's own
+    // settings db (which persists to app config, per print sequence) -- but the
+    // only accessor here was the const view. Same object the imgui dialog writes.
+    ArrangeSettingsDb_AppCfg & get_arrange_settings_db() { return m_arrange_settings_db; }
 
     const Selection& get_selection() const { return m_selection; }
     Selection& get_selection() { return m_selection; }
